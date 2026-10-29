@@ -241,7 +241,7 @@
     header small { color: #7b896e; font-weight: 700; letter-spacing: 3px; }
     h1 { font-size: 34px; letter-spacing: -.8px; }
     .badge { background: #f3f5ed; border: 0; color: #5e705f; }
-    main { max-width: 1500px; margin: auto; padding: 24px; gap: 24px; grid-template-columns: 300px minmax(0, 1fr); min-height: auto; }
+    main { width: 100%; margin: auto; padding: 18px; gap: 18px; grid-template-columns: 260px minmax(0, 1fr); min-height: auto; }
     aside { border: 1px solid #e1e7dd; border-radius: 20px; padding: 24px; align-self: start; }
     h2 { font-size: 26px; }
     .pill { background: #edf2e6; color: #4e6847; }
@@ -258,7 +258,7 @@
     .toolbar > button { background: #fff; border: 0; padding: 12px 18px; }
     .toolbar > button.active { background: var(--green); color: white; }
     .tools button { background: white; min-width: 44px; }
-    #viewport { height: clamp(420px, 65vh, 760px); min-height: 0; border-radius: 18px; border: 1px solid #dce3d7; background: #e8ece2; isolation: isolate; }
+    #viewport { height: max(520px, calc(100svh - 205px)); min-height: 0; border-radius: 18px; border: 1px solid #dce3d7; background: #e8ece2; isolation: isolate; }
     #plan { cursor: grab; touch-action: none; }
     #plan:active { cursor: grabbing; }
     .lot { stroke: #fff; stroke-width: 1.4; fill: #2aaf78; fill-opacity: .13; }
@@ -285,7 +285,7 @@
     @media(max-width: 700px) {
       header { padding: 18px 16px; } header small { font-size: 9px; } h1 { font-size: 27px; margin-top: 7px; }
       main { display: flex; padding: 16px 12px; gap: 18px; } .work { order: -1; width: 100%; }
-      #viewport { height: 49svh; min-height: 290px; max-height: 550px; border-radius: 14px; }
+      #viewport { height: 72svh; min-height: 380px; border-radius: 14px; }
       .toolbar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
       .toolbar > button { padding: 12px 8px; }
       .tools { grid-column: 1/-1; justify-content: flex-end; }
@@ -331,8 +331,9 @@
         >
       </div>
       <div class="note">
-        Plano alineado de forma aproximada al contorno KML. El ajuste visual
-        no sustituye una georreferenciación topográfica. Caminos rojos: proyectados.
+        Subdivisiones vectoriales trazadas a partir del plano y ajustadas al KML.
+        Ubicación aproximada; las superficies indicadas provienen del plano,
+        no del cálculo de los polígonos.
       </div>
       <footer>
         Fuentes: plano de subdivisión PDF y bosquejo KML proporcionados. No
@@ -341,11 +342,12 @@
     </aside>
     <section class="work">
       <div class="toolbar">
-        <label class="opacity-control" for="opacity">Plano <input id="opacity" type="range" min="0" max="100" value="85" aria-label="Opacidad del plano" /></label>
+        <button id="downloadKml">Descargar KML completo ↓</button>
+        <button id="showParcels">Ver parcelas</button>
         <div class="tools">
           <button id="minus" aria-label="Alejar">−</button
           ><button id="plus" aria-label="Acercar">+</button
-          ><button id="reset">Restablecer</button>
+          ><button id="reset">Campo completo</button>
         </div>
       </div>
       <div id="viewport">
@@ -387,7 +389,7 @@
       <div class="caption">
         <span id="caption"
           >Toca una parcela · Pellizca para ampliar · Arrastra para explorar</span
-        ><span>Verde: parcelas · Dorado: selección · Punteado: KML · Alineación aproximada</span>
+        ><span>Fucsia: caminos de las parcelas (proyectados, 6 m) · Azul: límite del predio · Naranja discontinuo: servidumbre</span>
       </div>
     </section>
   </main>
@@ -813,16 +815,39 @@
           [-39.12492641652658, -73.11255298847014],
         ],
       ];
+    // Bordes compartidos: una misma línea para las dos parcelas colindantes.
+    // Evita los pequeños solapes del trazado independiente sobre la imagen.
+    const edgeY = (x,a,b) => a[1]+(x-a[0])*(b[1]-a[1])/(b[0]-a[0]);
+    const upper = x => edgeY(x,[624,406],[1271,542]);
+    const middle = x => edgeY(x,[592,525],[1238,659]);
+    const lower = x => edgeY(x,[568,627],[1207,793]);
+    const stepped = x => x < 568 ? edgeY(x,[236,521],[568,627]) : lower(x);
+    for (const lot of lots) {
+      if(lot.id <= 11) lot.points = lot.points.map(([x,y],i)=>[x,i<2?upper(x):middle(x)]);
+      else if(lot.id <= 23) lot.points = lot.points.map(([x,y],i)=>{ if(lot.id===12 && i===3)x=568; return [x,i<2?middle(x):lower(x)]; });
+      else {
+        lot.points = lot.points.map(([x,y],i)=>[x,i<2?stepped(x):y]);
+        if(lot.points[0][0]<568 && lot.points[1][0]>568) lot.points.splice(1,0,[568,627]);
+      }
+    }
     const $ = (s) => document.querySelector(s);
     let current = null;
 
     const detail = $("#detail");
-    $(".work").append(detail);
-    detail.innerHTML = '<span class="pill">Tu próxima parcela, de un vistazo</span><h2>Elige un lugar en el plano</h2><p class="muted">Toca una parcela o búscala por número para ver su superficie y sus datos.</p>';
+    const modal = document.createElement('dialog');
+    modal.className = 'parcel-modal';
+    modal.setAttribute('aria-labelledby','parcelTitle');
+    document.body.append(modal);
+    modal.append(detail);
+    detail.removeAttribute('aria-live');
+    modal.addEventListener('click', e => { if(e.target === modal) { const r=modal.getBoundingClientRect(); if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom) modal.close(); } });
+    modal.addEventListener('close',()=>document.body.classList.remove('modal-open'));
+    // El plano raster no participa en el visor: solamente polígonos y etiquetas.
+    [...$('#plan').children].forEach(el => { if(el.id !== 'polygons') el.remove(); });
     const empty = document.createElement('p');
     empty.className = 'muted'; empty.hidden = true; empty.textContent = 'No hay parcelas con ese número.';
     $("#list").after(empty);
-    let map, overlay, selectedLayer, focusOffline;
+    let map, selectedLayer, focusOffline;
     const layers = new Map();
     const format = n => n.toLocaleString('es-CL');
     function selectLot(id, focus = false) {
@@ -834,22 +859,18 @@
         el.classList.toggle(el.matches('.lot') ? 'selected' : 'active', active);
         el.setAttribute('aria-pressed', String(active));
       });
-      layers.forEach((layer, key) => { layer.setStyle({color: key === id ? '#ffe39a' : '#e8fff0', fillColor: key === id ? '#efbd4d' : '#319365', fillOpacity: key === id ? .65 : .12, weight: key === id ? 3 : 1}); layer.getElement().setAttribute('aria-pressed',String(key === id)); });
+      layers.forEach((layer, key) => { layer.setStyle({color: key === id ? '#bf851c' : '#236749', fillColor: key === id ? '#efbd4d' : '#61ac80', fillOpacity: key === id ? .7 : .4, weight: key === id ? 3 : 1.5}); layer.getElement().setAttribute('aria-pressed',String(key === id)); });
       selectedLayer = layers.get(id);
       if (focus && map && selectedLayer) map.fitBounds(selectedLayer.getBounds().pad(1.3), {maxZoom: 18});
       if (focus && !map && focusOffline) focusOffline(lot);
-      detail.innerHTML = `<div class="detail-head"><div><span class="muted">PARCELA SELECCIONADA</span><h2>Parcela ${id.toString().padStart(2,'0')}</h2></div><button id="closeDetail" aria-label="Quitar selección">✕</button></div><div class="detail-grid"><div><span>Superficie según plano</span><strong class="area">${format(lot.ha * 10000)} m²</strong> <small>${format(lot.ha)} ha</small></div><div><span>Precio</span><strong>Por informar</strong></div><div><span>Disponibilidad</span><strong>Por confirmar</strong></div></div><div class="detail-actions"><button id="focusLot">Centrar parcela</button><button id="prevLot" ${id === 1 ? 'disabled' : ''}>← Anterior</button><button id="nextLot" ${id === 40 ? 'disabled' : ''}>Siguiente →</button></div>`;
-      $('#closeDetail').onclick = clearSelection;
-      $('#focusLot').onclick = () => { selectLot(id, true); $('#viewport').scrollIntoView({block:'nearest', behavior:'smooth'}); };
+      detail.innerHTML = `<div class="detail-head"><div><span class="muted">PARCELA SELECCIONADA</span><h2 id="parcelTitle">Parcela ${id.toString().padStart(2,'0')}</h2></div><button id="closeDetail" aria-label="Cerrar ficha">✕</button></div><div class="detail-grid"><div><span>Superficie según plano</span><strong class="area">${format(lot.ha * 10000)} m²</strong> <small>${format(lot.ha)} ha</small></div><div><span>Precio</span><strong>Por informar</strong></div><div><span>Disponibilidad</span><strong>Por confirmar</strong></div></div><p class="muted modal-note">Ubicación aproximada, digitalizada desde el plano de subdivisión.</p><div class="detail-actions"><button id="focusLot">Ver en el mapa</button><button id="downloadLot">Descargar esta parcela ↓</button><button id="prevLot" ${id === 1 ? 'disabled' : ''}>← Anterior</button><button id="nextLot" ${id === 40 ? 'disabled' : ''}>Siguiente →</button></div>`;
+      $('#closeDetail').onclick = () => modal.close();
+      $('#focusLot').onclick = () => { selectLot(id, true); modal.close(); $('#viewport').scrollIntoView({block:'nearest', behavior:'smooth'}); };
+      $('#downloadLot').onclick = () => downloadKml([lot],`Santa_Felicia_Parcela_${id}.kml`,false);
       $('#prevLot').onclick = () => selectLot(id - 1, true);
       $('#nextLot').onclick = () => selectLot(id + 1, true);
-      if (window.matchMedia('(max-width:700px)').matches && !focus) detail.scrollIntoView({block:'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-    }
-    function clearSelection() {
-      current = null;
-      document.querySelectorAll('#list button, .lot').forEach(el => { el.classList.remove('active','selected'); el.setAttribute('aria-pressed','false'); });
-      layers.forEach(layer => { layer.setStyle({color:'#e8fff0',fillColor:'#319365',fillOpacity:.12,weight:1}); layer.getElement().setAttribute('aria-pressed','false'); });
-      detail.innerHTML = '<h2>Elige una parcela</h2><p class="muted">Toca el plano o utiliza el listado para consultar sus datos.</p>';
+      if(!modal.open) { modal.showModal(); document.body.classList.add('modal-open'); }
+      $('#closeDetail').focus({preventScroll:true});
     }
     const ns = 'http://www.w3.org/2000/svg';
     for (const lot of lots) {
@@ -867,6 +888,11 @@
       polygon.onclick = () => selectLot(lot.id);
       polygon.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectLot(lot.id); } };
       $('#polygons').append(polygon);
+      const label = document.createElementNS(ns,'text');
+      label.setAttribute('x',lot.points.reduce((s,p)=>s+p[0],0)/lot.points.length);
+      label.setAttribute('y',lot.points.reduce((s,p)=>s+p[1],0)/lot.points.length);
+      label.setAttribute('class','lot-label'); label.textContent=lot.id;
+      $('#polygons').append(label);
     }
     $('#search').oninput = e => {
       const term = e.target.value.trim(); let count = 0;
@@ -881,26 +907,86 @@
     function projected(x,y) { const [a,b,c,d,e,f] = affine; return [a*x+c*y+e,b*x+d*y+f]; }
     function latLng(p) { return [Math.atan(Math.sinh(p[1]*Math.PI/180))*180/Math.PI,p[0]]; }
     function geo(p) { return latLng(projected(...p)); }
+    // Digitalización del contorno y de la simbología del PDF en el mismo espacio del plano.
+    const southBoundary = [[1180,921],[1150,1040],[1097,1205],[1044,1269],[968,1237],[891,1233],[803,1202],[740,1153],[681,1120],[642,1106],[605,1101],[544,1113],[514,1109],[501,1096],[491,1071],[471,1053],[422,1029],[370,993],[335,1004],[305,998],[284,976],[266,935],[232,906],[199,881],[161,858],[127,850]];
+    const remainingTop = [lots[23].points.at(-1), ...lots.slice(23).map(l=>l.points.at(-2))];
+    const fieldOutline = [[624,406],[1271,542],[1207,793],...southBoundary,[198,639],[236,521],[568,627]];
+    const features = [
+      {id:'field',name:'Límite completo del predio',type:'polygon',points:fieldOutline,color:'#75baff',fill:0,group:'Límite del predio',description:'Contorno azul, incluyendo el sector sur del campo. Superficie total declarada: 50 ha. Trazado visual aproximado; no es el polígono del KML original.'},
+      {id:'remaining',name:'Santa Felicia · Lote A restante',type:'polygon',points:[...remainingTop,...southBoundary.slice(1)],color:'#b1cb80',fill:.18,group:'Resto del campo',label:[720,1010],description:'28,00 ha. Rol 208-115. Corresponde al sector restante al sur de las parcelas; la superficie declarada no se calcula desde este dibujo.'},
+      {id:'road-main',name:'Camino de las parcelas · eje interior proyectado',type:'line',points:[[198,639],[236,521],[568,627],[1207,793]],color:'#f02bbd',group:'Caminos y accesos',description:'Camino de las parcelas: ramal oeste y eje entre las filas de lotes. Corresponde al trazo continuo rosa/rojo del plano. Ancho proyectado: 6 metros. El cuadro asigna 1,22 ha al conjunto del camino vecinal. La línea representa el trazado; su grosor en pantalla no está a escala.'},
+      {id:'road-upper',name:'Camino de las parcelas · perímetro superior proyectado',type:'line',points:[[568,627],[624,406],[1271,542],[1207,793]],color:'#f02bbd',group:'Caminos y accesos',description:'Camino de las parcelas que recorre los bordes oeste, norte y este del bloque superior, conectado con el eje interior y el portal de acceso. Ancho proyectado indicado en el PDF: 6 metros. La línea representa el trazado; su grosor en pantalla no está a escala.'},
+      {id:'easement',name:'Servidumbre de tránsito indicada',type:'line',points:[[861,upper(861)],[984,70]],color:'#ffbe63',dash:'8 7',group:'Caminos y accesos',description:'Trazo rojo discontinuo identificado como servidumbre de tránsito. Conecta el portal con el acceso indicado al camino público. Representación documental, no verificación legal ni vial.'},
+      {id:'portal',name:'Portal de acceso',type:'polygon',points:[[836,upper(836)],[890,upper(890)],[854,middle(854)],[801,middle(801)]],color:'#edbf64',fill:.45,group:'Caminos y accesos',description:'Portal entre las parcelas 4 y 5. Superficie según el cuadro: 0,50 ha (5.000 m²). Rol indicado: S-R.'},
+      {id:'public-road',name:'Camino público · tramo visible en el PDF',type:'line',points:[[930,0],[984,70],[1080,140],[1200,177],[1350,290]],color:'#e6edf1',group:'Caminos y accesos',description:'Tramo del camino público visible en la parte superior del plano. La línea termina donde termina la imagen; no representa una ruta de navegación.'},
+      {id:'entrance',name:'Acceso indicado al camino público',type:'point',points:[[984,70]],color:'#edbf64',group:'Caminos y accesos',description:'Punto señalado como «Acceso camino público» en el PDF. Ubicación digitalizada aproximada.'},
+      {id:'boundary-north',name:'Deslinde vecino · tramo norte visible',type:'line',points:[[0,154],[113,275],[624,406]],color:'#aebbc5',group:'Referencias vecinas',description:'Deslinde negro visible entre los predios vecinos al norte. Solo se reproduce el tramo mostrado en el PDF; no delimita una propiedad completa.'},
+      {id:'boundary-west',name:'Deslinde vecino · tramo oeste visible',type:'line',points:[[113,275],[64,445],[0,425]],color:'#aebbc5',group:'Referencias vecinas',description:'Tramo de deslinde negro visible al oeste en el PDF. Referencia exterior, no forma parte de las subdivisiones.'},
+      {id:'boundary-southwest',name:'Deslindes vecinos · unión suroeste',type:'line',points:[[0,795],[127,850],[0,976]],color:'#aebbc5',group:'Referencias vecinas',description:'Tramos de deslindes negros que confluyen con el límite del predio en el sector suroeste del plano.'},
+      {id:'neighbor-b',name:'Santa Felicia · Lote B',type:'point',points:[[440,460]],color:'#c5ccd1',group:'Referencias vecinas',description:'Predio vecino rotulado en el PDF: Santa Felicia Lote B, rol 208-116. No forma parte de las 40 parcelas.'},
+      {id:'neighbor-north',name:'Inmueble 208-21',type:'point',points:[[775,335]],color:'#c5ccd1',group:'Referencias vecinas',description:'Referencia vecina al norte, identificada en el PDF como Inmueble 208-21.'},
+      {id:'neighbor-west',name:'Vegas del Soco · Lote K-2',type:'point',points:[[98,565]],color:'#c5ccd1',group:'Referencias vecinas',description:'Referencia vecina al oeste: Vegas del Soco, Lote K-2, rol 204-134.'},
+      {id:'neighbor-south',name:'Vegas del Soco · Lote K-1',type:'point',points:[[325,1100]],color:'#c5ccd1',group:'Referencias vecinas',description:'Referencia vecina al suroeste: Vegas del Soco, Lote K-1, rol 204-133.'}
+    ];
+    function makeKml(selection = lots, includeContext = true) {
+      const coordinates = points => points.map(p => `${p[1].toFixed(9)},${p[0].toFixed(9)},0`).join(' ');
+      const polygon = points => `<Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>${coordinates([...points,points[0]])}</coordinates></LinearRing></outerBoundaryIs></Polygon>`;
+      const parcels = selection.map(lot => `<Placemark><name>Parcela ${lot.id}</name><description>Superficie según plano: ${lot.ha*10000} m² (${lot.ha} ha). Precio por informar. Disponibilidad por confirmar. Trazado aproximado digitalizado; no corresponde a una mensura.</description><styleUrl>#parcela</styleUrl><ExtendedData><Data name="numero"><value>${lot.id}</value></Data><Data name="superficie_plano_m2"><value>${lot.ha*10000}</value></Data><Data name="precision"><value>Aproximada; digitalización del plano</value></Data><Data name="precio"><value>Por informar</value></Data><Data name="disponibilidad"><value>Por confirmar</value></Data></ExtendedData>${polygon(lot.points.map(geo))}</Placemark>`).join('\n');
+      const escapeXml = text => text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+      const context = includeContext ? `<Folder><name>Campo completo · trazado del PDF</name>${features.map(f=>{
+        const points=f.points.map(geo), rgb=f.color.slice(1), color=rgb.slice(4,6)+rgb.slice(2,4)+rgb.slice(0,2);
+        const geometry=f.type==='polygon'?polygon(points):f.type==='point'?`<Point><coordinates>${coordinates(points)}</coordinates></Point>`:`<LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>${coordinates(points)}</coordinates></LineString>`;
+        return `<Placemark><name>${escapeXml(f.name)}</name><description>${escapeXml(f.description)} Fuente: PDF sin escala. Ubicación aproximada.</description><Style><LineStyle><color>ff${color}</color><width>3</width></LineStyle><PolyStyle><color>33${color}</color><fill>${f.fill?1:0}</fill></PolyStyle></Style>${geometry}</Placemark>`;
+      }).join('')}</Folder>` : '';
+      return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Santa Felicia · Subdivisiones aproximadas</name><description>Parcelas vectoriales independientes de la imagen del PDF. Coordenadas WGS84 obtenidas mediante ajuste visual al KML de referencia. Superficies declaradas del plano, no calculadas desde estos polígonos.</description><Style id="parcela"><LineStyle><color>ff496723</color><width>2</width></LineStyle><PolyStyle><color>8880ac61</color></PolyStyle></Style><Style id="referencia"><LineStyle><color>ff1c85bf</color><width>3</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style><Folder><name>Parcelas</name>${parcels}</Folder>${context}</Document></kml>`;
+    }
+    function downloadKml(selection, filename, includeContext=false) {
+      const url=URL.createObjectURL(new Blob([makeKml(selection,includeContext)],{type:'application/vnd.google-earth.kml+xml;charset=utf-8'}));
+      const link=document.createElement('a'); link.href=url; link.download=filename; document.body.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+    $('#downloadKml').onclick=()=>downloadKml(lots,'Santa_Felicia_Campo_Completo.kml',true);
     if (window.L) {
       $('#plan').style.display = 'none'; $('#map').style.display = 'block';
       map = L.map('map',{zoomControl:false,scrollWheelZoom:true}).setView(kml[0][0],16);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+      map.createPane('parcelRoads');
+      map.getPane('parcelRoads').style.zIndex=450;
+      const basemap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxNativeZoom:19,
+        maxZoom:20,
+        attribution:'Imágenes &copy; <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a>, Maxar, Earthstar Geographics y la comunidad GIS'
+      }).addTo(map);
+      const mapStatus = document.createElement('p');
+      mapStatus.className = 'map-info';
+      mapStatus.setAttribute('role','status');
+      mapStatus.hidden = true;
+      mapStatus.textContent = 'No se pudo cargar parte del fondo satelital. Las parcelas y sus fichas siguen disponibles. Comprueba tu conexión y pulsa Reintentar.';
+      const retry = document.createElement('button');
+      retry.textContent = 'Reintentar';
+      retry.style.marginLeft = '8px';
+      mapStatus.append(retry);
+      $('#viewport').after(mapStatus);
+      let tileFailed = false;
+      basemap.on('loading',()=>{ tileFailed=false; });
+      basemap.on('tileerror',event=>{
+        tileFailed=true;
+        event.tile.style.visibility='hidden';
+        mapStatus.hidden=false;
+      });
+      basemap.on('load',()=>{ mapStatus.hidden=!tileFailed; });
+      retry.onclick=()=>{ mapStatus.hidden=true; basemap.redraw(); };
       L.control.scale({imperial:false,position:'bottomleft'}).addTo(map);
-      const corners = [[0,0],[1361,0],[1361,1294],[0,1294]].map(p=>projected(...p));
-      const west = Math.min(...corners.map(p=>p[0])), east = Math.max(...corners.map(p=>p[0]));
-      const south = Math.min(...corners.map(p=>p[1])), north = Math.max(...corners.map(p=>p[1]));
-      const imageSvg = document.createElementNS(ns,'svg');
-      const scale = 100000;
-      imageSvg.setAttribute('viewBox',`0 0 ${(east-west)*scale} ${(north-south)*scale}`);
-      const group = document.createElementNS(ns,'g');
-      const [a,b,c,d,e,f] = affine;
-      group.setAttribute('transform',`matrix(${a*scale} ${-b*scale} ${c*scale} ${-d*scale} ${(e-west)*scale} ${(north-f)*scale})`);
-      group.append($('#plan image').cloneNode(true)); imageSvg.append(group);
-      overlay = L.svgOverlay(imageSvg,[latLng([west,south]),latLng([east,north])],{opacity:.85,interactive:false}).addTo(map);
-      L.polygon(kml[0],{color:'#f4ce73',weight:3,dashArray:'7 7',fill:false,interactive:false}).addTo(map);
-      L.polyline(kml[1],{color:'#ecbd72',weight:2,dashArray:'5 7',interactive:false}).addTo(map);
+      const groups = Object.fromEntries([...new Set(features.map(f=>f.group))].map(name=>[name,L.layerGroup().addTo(map)]));
+      // Las superficies amplias quedan debajo de las parcelas para no interceptar su selección.
+      for (const f of [...features].sort((a,b)=>(a.id==='remaining'?-1:a.type==='polygon'?0:1)-(b.id==='remaining'?-1:b.type==='polygon'?0:1))) {
+        const isParcelRoad=f.id.startsWith('road-');
+        const options={color:f.color,weight:isParcelRoad?6:f.type==='line'?4:2.5,fillOpacity:f.fill||0,dashArray:f.dash,interactive:false,pane:isParcelRoad?'parcelRoads':'overlayPane'};
+        const layer=f.type==='polygon'?L.polygon(f.points.map(geo),options):f.type==='point'?L.circleMarker(geo(f.points[0]),{...options,radius:6,fillOpacity:.9}):L.polyline(f.points.map(geo),options);
+        layer.addTo(groups[f.group]);
+        if(f.label) L.marker(geo(f.label),{interactive:false,keyboard:false,icon:L.divIcon({className:'field-label',html:'Lote A restante<br><small>28 ha según PDF</small>',iconSize:[160,42],iconAnchor:[80,21]})}).addTo(groups[f.group]);
+      }
+      L.control.layers(null,groups,{collapsed:true,position:'topright'}).addTo(map);
       for (const lot of lots) {
-        const layer = L.polygon(lot.points.map(geo),{color:'#e8fff0',weight:1,fillColor:'#319365',fillOpacity:.12}).addTo(map);
+        const layer = L.polygon(lot.points.map(geo),{color:'#236749',weight:1.5,fillColor:'#61ac80',fillOpacity:.4}).addTo(map);
         layer.on('click',()=>selectLot(lot.id));
         const path = layer.getElement();
         path.setAttribute('tabindex','0'); path.setAttribute('role','button'); path.setAttribute('aria-label',`Parcela ${lot.id}`);
@@ -909,15 +995,27 @@
         const center = lot.points.reduce((r,p)=>[r[0]+p[0]/lot.points.length,r[1]+p[1]/lot.points.length],[0,0]);
         L.marker(geo(center),{interactive:false,keyboard:false,icon:L.divIcon({className:'map-lot-label',html:String(lot.id),iconSize:[24,20],iconAnchor:[12,10]})}).addTo(map);
       }
-      function resetMap() { map.fitBounds(L.latLngBounds(lots.flatMap(l=>l.points.map(geo))),{padding:[24,24]}); }
+      function resetMap() { map.fitBounds(L.latLngBounds([...fieldOutline,[984,70]].map(geo)),{padding:[28,28]}); }
+      $('#showParcels').onclick=()=>map.fitBounds(L.latLngBounds(lots.flatMap(l=>l.points.map(geo))),{padding:[24,24]});
       $('#plus').onclick = ()=>map.zoomIn(); $('#minus').onclick = ()=>map.zoomOut(); $('#reset').onclick = resetMap;
-      $('#opacity').oninput = e => overlay.setOpacity(+e.target.value/100);
       resetMap();
       new ResizeObserver(()=>map.invalidateSize()).observe($('#viewport'));
     } else {
-      $('#caption').textContent = 'Plano sin conexión. Con internet se carga el mapa y el contorno KML.';
-      $('.opacity-control').hidden = true;
-      let box = [100,350,1250,650]; const render = () => $('#plan').setAttribute('viewBox',box.join(' '));
+      $('#caption').textContent = 'Subdivisiones sin conexión. Con internet se carga el mapa de fondo. Toca una parcela para ver su ficha.';
+      let box = [0,0,1361,1294]; const render = () => $('#plan').setAttribute('viewBox',box.join(' '));
+      $('#showParcels').onclick=()=>{box=[100,350,1250,650];render();};
+      const contextGroup=document.createElementNS(ns,'g'); $('#plan').prepend(contextGroup);
+      for(const f of features) {
+        const el=document.createElementNS(ns,f.type==='polygon'?'polygon':f.type==='point'?'circle':'polyline');
+        if(f.type==='point'){el.setAttribute('cx',f.points[0][0]);el.setAttribute('cy',f.points[0][1]);el.setAttribute('r','7');}
+        else el.setAttribute('points',f.points.map(p=>p.join(',')).join(' '));
+        el.setAttribute('stroke',f.color);el.setAttribute('stroke-width','4');el.setAttribute('fill',f.type==='line'||!f.fill?'none':f.color);el.setAttribute('fill-opacity',f.fill||0);
+        if(f.type==='point'){el.setAttribute('fill',f.color);el.setAttribute('fill-opacity','1');}
+        if(f.dash)el.setAttribute('stroke-dasharray',f.dash);
+        el.setAttribute('aria-hidden','true');el.style.pointerEvents='none';
+        contextGroup.append(el);
+        if(f.id.startsWith('road-')) { el.setAttribute('stroke-width','6'); $('#plan').append(el); }
+      }
       focusOffline = lot => { const xs=lot.points.map(p=>p[0]), ys=lot.points.map(p=>p[1]); box=[Math.min(...xs)-100,Math.min(...ys)-100,Math.max(...xs)-Math.min(...xs)+200,Math.max(...ys)-Math.min(...ys)+200]; render(); };
       function zoom(f) { if(box[2]*f<150||box[2]*f>4000)return; box=[box[0]+box[2]*(1-f)/2,box[1]+box[3]*(1-f)/2,box[2]*f,box[3]*f];render(); }
       $('#plus').onclick=()=>zoom(.8); $('#minus').onclick=()=>zoom(1.25); $('#reset').onclick=()=>{box=[0,0,1361,1294];render();};
@@ -932,6 +1030,28 @@
     }
   </script>
   <style>
+    main { display:block; }
+    main > aside { display:none; }
+    main > .work { width:100%; }
+    .tools button:hover, .toolbar > button:hover { background:var(--green); color:white; }
+    .field-label { color:white; text-align:center; font:600 15px system-ui; text-shadow:0 1px 4px #152719,0 0 6px #152719; }
+    .leaflet-control-layers input { width:auto; min-height:0; margin:0 6px 0 0; }
+    .leaflet-control-layers label { padding:6px; }
+    body.modal-open { overflow:hidden; }
+    .parcel-modal { padding:0; border:0; border-radius:22px; width:min(560px,calc(100% - 32px)); max-height:calc(100dvh - 40px); color:var(--ink); background:white; box-shadow:0 24px 90px #102d3540; }
+    .parcel-modal::backdrop { background:rgb(12 30 24 / 55%); backdrop-filter:blur(4px); }
+    .parcel-modal .detail { margin:0; border:0; padding:28px; }
+    .parcel-modal .detail-grid { grid-template-columns:1fr 1fr; gap:24px; margin:26px 0; }
+    .parcel-modal .detail-grid > div:first-child { grid-column:1/-1; padding:22px; background:#f0f5ec; border-radius:14px; }
+    .parcel-modal .detail-grid .area { font-size:38px; }
+    .parcel-modal .modal-note { font-size:12px; }
+    .parcel-modal #focusLot { background:var(--green); color:white; }
+    .parcel-modal .detail-actions button:hover:not(:disabled) { background:var(--green); color:white; }
+    .parcel-modal button:disabled { background:#f2f5ec; color:#69786f; }
+    #plan .lot { fill:#61ac80; fill-opacity:.4; stroke:#236749; }
+    #plan .lot.selected { fill:#efbd4d; fill-opacity:.7; stroke:#bf851c; }
+    .map-lot-label { background:#173e33; border-radius:6px; line-height:20px; }
+    @media(max-width:700px) { .parcel-modal .detail { padding:22px; } .parcel-modal .detail-actions button { flex:1 1 40%; } }
     .opacity-control { display:flex; align-items:center; gap:12px; font-size:13px; font-weight:600; background:white; border-radius:10px; padding:0 14px; min-height:44px; }
     .opacity-control input { width:110px; padding:0; margin:0; accent-color:#224c3a; }
     .map-lot-label { color:white; font:bold 12px system-ui; text-align:center; text-shadow:0 1px 3px #102e23,1px 0 2px #102e23; pointer-events:none; }
